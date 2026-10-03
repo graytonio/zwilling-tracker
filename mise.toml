@@ -1,0 +1,35 @@
+[tools]
+rust = { version = "1.94.0", components = "clippy,rustfmt" }
+
+[env]
+DATABASE_URL = "postgres://postgres:postgres@localhost:5432/zwilling"
+
+[tasks.db]
+description = "Start only postgres in docker"
+run = "docker compose up -d --wait db"
+
+[tasks.run]
+description = "Run the server natively (against the docker db)"
+depends = ["db"]
+run = "cargo run"
+
+[tasks.lint]
+description = "Check formatting and clippy"
+run = ["cargo fmt --check", "cargo clippy --all-targets -- -D warnings"]
+
+[tasks.test]
+description = "Run tests against the docker db"
+depends = ["db"]
+run = "cargo test"
+
+[tasks.build]
+description = "Build release binary"
+run = "cargo build --release"
+
+[tasks.dev]
+description = "Run in docker compose, rebuilding on source changes"
+run = "docker compose up --build --watch"
+
+[tasks.down]
+description = "Stop docker compose"
+run = "docker compose down"

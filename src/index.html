@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Storage Scanner</title>
+  <script src="/jsQR.min.js"></script>
+  <style>
+    :root {
+      --accent: #0f9d76;
+      --accent-ink: #ffffff;
+      --danger: #d93838;
+      --surface: #ffffff;
+      --surface-2: #f2f4f3;
+      --ink: #121614;
+      --ink-2: #5d6662;
+      --line: #e1e5e3;
+      --radius: 20px;
+      --shadow: 0 -8px 40px rgb(0 0 0 / .25);
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --accent: #2fd3a0;
+        --accent-ink: #04140e;
+        --danger: #ff6b6b;
+        --surface: #17191a;
+        --surface-2: #222526;
+        --ink: #eef1f0;
+        --ink-2: #9aa4a0;
+        --line: #2d3132;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #000;
+      color: var(--ink);
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Camera: video and overlay share object-fit so the tracking box lines up with the picture. */
+    #video, #overlay { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    #overlay { pointer-events: none; }
+    .reticle {
+      position: fixed; left: 50%; top: 42%; width: min(64vw, 280px); aspect-ratio: 1;
+      translate: -50% -50%; pointer-events: none; transition: opacity .2s, scale .2s;
+      --c: rgb(255 255 255 / .9);
+      background:
+        linear-gradient(var(--c) 0 0) top left / 36px 4px no-repeat,
+        linear-gradient(var(--c) 0 0) top left / 4px 36px no-repeat,
+        linear-gradient(var(--c) 0 0) top right / 36px 4px no-repeat,
+        linear-gradient(var(--c) 0 0) top right / 4px 36px no-repeat,
+        linear-gradient(var(--c) 0 0) bottom left / 36px 4px no-repeat,
+        linear-gradient(var(--c) 0 0) bottom left / 4px 36px no-repeat,
+        linear-gradient(var(--c) 0 0) bottom right / 36px 4px no-repeat,
+        linear-gradient(var(--c) 0 0) bottom right / 4px 36px no-repeat;
+    }
+    body.detected .reticle, body.sheet-open .reticle { opacity: 0; scale: 1.08; }
+
+    /* Top bar */
+    .topbar {
+      position: fixed; inset: 0 0 auto; padding: calc(env(safe-area-inset-top) + 16px) 20px 32px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: linear-gradient(rgb(0 0 0 / .6), transparent); color: #fff;
+    }
+    .topbar h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+      background: rgb(255 255 255 / .14); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      font-size: 13px; font-weight: 550;
+    }
+    .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ffd166; animation: pulse 1.4s infinite; }
+    body.detected .pill::before { background: #2fd3a0; animation: none; }
+    @keyframes pulse { 50% { opacity: .3; } }
+
+    .hint {
+      position: fixed; left: 0; right: 0; top: calc(42% + min(32vw, 140px) + 24px); margin: 0;
+      text-align: center; color: rgb(255 255 255 / .85); font-size: 15px; padding: 0 24px;
+      text-shadow: 0 1px 8px rgb(0 0 0 / .6); transition: opacity .2s;
+    }
+    body.detected .hint, body.sheet-open .hint { opacity: 0; }
+
+    /* Bottom sheet */
+    .sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; margin: 0 auto; max-width: 520px;
+      max-height: 80vh; overflow-y: auto;
+      background: var(--surface); border-radius: var(--radius) var(--radius) 0 0; box-shadow: var(--shadow);
+      padding: 10px 20px calc(env(safe-area-inset-bottom) + 20px);
+      translate: 0 105%; transition: translate .32s cubic-bezier(.2, .8, .2, 1);
+    }
+    body.sheet-open .sheet { translate: 0 0; }
+    @media (min-width: 560px) { .sheet { bottom: 16px; border-radius: var(--radius); } }
+    .grabber { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 14px; }
+    .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .eyebrow { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+    .sheet h2 { margin: 2px 0 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+    .icon-btn {
+      flex: none; width: 36px; height: 36px; border-radius: 50%; border: 0; display: grid; place-items: center;
+      background: var(--surface-2); color: var(--ink-2); font-size: 15px; cursor: pointer;
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; padding: 0; list-style: none; }
+    .chip { display: flex; gap: 6px; align-items: baseline; padding: 6px 10px; border-radius: 10px; background: var(--surface-2); font-size: 14px; }
+    .chip span { color: var(--ink-2); font-size: 12px; }
+    .chip b { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; }
+
+    .label { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; }
+    .readonly, textarea {
+      display: block; width: 100%; min-height: 96px; padding: 14px 16px; border-radius: 14px; font: inherit; color: var(--ink);
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .readonly { background: var(--surface-2); border: 1.5px solid transparent; }
+    textarea { background: var(--surface); border: 1.5px solid var(--line); resize: vertical; outline: none; }
+    textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
+    .empty-note { margin: -2px 0 10px; color: var(--ink-2); font-size: 15px; }
+    .counter { text-align: right; font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+
+    .actions { display: flex; gap: 10px; margin-top: 16px; }
+    .btn {
+      flex: 1; min-height: 48px; border-radius: 14px; border: 0; font: inherit; font-weight: 650; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: filter .15s, scale .1s;
+    }
+    .btn:hover:not(:disabled) { filter: brightness(1.05); }
+    .btn:active { scale: .98; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .btn-primary { background: var(--accent); color: var(--accent-ink); }
+    .btn-secondary { background: var(--surface-2); color: var(--ink); }
+    .btn-danger { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--danger) 40%, transparent); }
+    button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+    .skeleton { height: 96px; border-radius: 14px; background: linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite linear; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+    .notice { padding: 14px 16px; border-radius: 14px; background: var(--surface-2); color: var(--ink-2); margin: 14px 0 0; }
+    .raw { font-family: ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); margin-top: 8px; }
+
+    .toast {
+      position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 72px); translate: -50% -20px; opacity: 0;
+      padding: 10px 16px; border-radius: 999px; background: var(--ink); color: var(--surface); font-size: 14px; font-weight: 600;
+      transition: opacity .2s, translate .2s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; translate: -50% 0; }
+
+    .topbar-actions { display: flex; align-items: center; gap: 10px; }
+    .search-btn {
+      width: 36px; height: 36px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+      background: rgb(255 255 255 / .14); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff;
+    }
+    .search-field {
+      display: block; width: 100%; margin: 14px 0 6px; padding: 12px 14px 12px 42px; border-radius: 14px; font: inherit; color: var(--ink);
+      background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='m13 13 4 4'/%3E%3C/svg%3E") 14px center no-repeat;
+      border: 1.5px solid transparent; outline: none;
+    }
+    .search-field:focus { border-color: var(--accent); background-color: var(--surface); }
+    .results { list-style: none; margin: 0; padding: 0; }
+    .results li + li { border-top: 1px solid var(--line); }
+    .result {
+      display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; width: 100%; padding: 12px 4px; text-align: left;
+      background: none; border: 0; font: inherit; color: var(--ink); cursor: pointer; border-radius: 10px;
+    }
+    .result:hover { background: var(--surface-2); }
+    .result b { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 650; }
+    .result small { color: var(--ink-2); font-size: 12px; align-self: center; }
+    .result span { grid-column: 1 / -1; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .results-meta { font-size: 13px; color: var(--ink-2); margin: 8px 0 4px; }
+    .back-btn { background: none; border: 0; padding: 0 0 6px; font: inherit; font-size: 14px; font-weight: 600; color: var(--accent); cursor: pointer; }
+
+    .cam-error { position: fixed; inset: 0; display: grid; place-items: center; padding: 32px; color: #fff; text-align: center; }
+
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div class="reticle" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <h1>Storage Scanner</h1>
+    <div class="topbar-actions">
+      <span class="pill" id="pill" role="status">Scanning</span>
+      <button class="search-btn" id="search-btn" aria-label="Search containers">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="m13 13 4 4"/></svg>
+      </button>
+    </div>
+  </header>
+  <p class="hint" id="hint">Point the camera at the code on a container</p>
+
+  <section class="sheet" id="sheet" role="dialog" aria-labelledby="sheet-title" inert>
+    <div class="grabber" aria-hidden="true"></div>
+    <div id="sheet-body"></div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const MAX_LEN = 2000;
+    const $ = s => document.querySelector(s);
+    const video = $('#video'), overlay = $('#overlay'), octx = overlay.getContext('2d');
+    const sheet = $('#sheet'), sheetBody = $('#sheet-body'), pill = $('#pill');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // Small element builder so scanned/stored text only ever goes in via textContent.
+    function h(tag, props = {}, ...children) {
+      const el = Object.assign(document.createElement(tag), props);
+      el.append(...children.filter(c => c != null && c !== false));
+      return el;
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      .then(stream => { video.srcObject = stream; video.play(); requestAnimationFrame(scan); })
+      .catch(err => {
+        document.body.append(h('div', { className: 'cam-error' },
+          h('p', {}, h('strong', {}, 'Camera unavailable'), h('br'), err.message, h('br'),
+            'Camera access needs HTTPS or localhost.')));
+        $('.reticle').remove(); $('#hint').remove();
+      });
+
+    function scan() {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = overlay.width = video.videoWidth;
+        canvas.height = overlay.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+        const found = !!(code && code.data);
+        document.body.classList.toggle('detected', found);
+        pill.textContent = found ? 'Code found' : 'Scanning';
+        if (found) {
+          drawBox(code.location);
+          onCode(code.data);
+        }
+      }
+      requestAnimationFrame(scan);
+    }
+
+    function drawBox({ topLeftCorner: a, topRightCorner: b, bottomRightCorner: c, bottomLeftCorner: d }) {
+      octx.beginPath();
+      octx.moveTo(a.x, a.y);
+      octx.lineTo(b.x, b.y);
+      octx.lineTo(c.x, c.y);
+      octx.lineTo(d.x, d.y);
+      octx.closePath();
+      octx.lineJoin = 'round';
+      octx.lineWidth = Math.max(4, overlay.width / 120);
+      octx.strokeStyle = '#2fd3a0';
+      octx.fillStyle = 'rgb(47 211 160 / .18)';
+      octx.fill();
+      octx.stroke();
+    }
+
+    // zwilling://zwillingapp/food-storage/in/?tc=12LB02&s=m&cc=1VST
+    function parseZwilling(text) {
+      let url;
+      try { url = new URL(text); } catch { return null; }
+      if (url.protocol !== 'zwilling:' || url.host !== 'zwillingapp' || !url.pathname.startsWith('/food-storage/')) return null;
+      const p = url.searchParams;
+      if (!p.get('tc')) return null;
+      return { product: p.get('tc'), size: p.get('s'), container: p.get('cc') };
+    }
+
+    // { text, info, mode: 'loading' | 'view' | 'edit' | 'error', contents, busy, error }
+    let state = null;
+
+    function onCode(text) {
+      // Scanning runs every frame: ignore the code already shown, and never interrupt an edit or a save.
+      if (state && (state.text === text || state.mode === 'edit' || state.mode === 'search' || state.busy)) return;
+      navigator.vibrate?.(25);
+      const info = parseZwilling(text);
+      state = { text, info, mode: info?.container ? 'loading' : 'view', contents: null };
+      document.body.classList.add('sheet-open');
+      sheet.inert = false;
+      render();
+      if (info?.container) load();
+    }
+
+    function closeSheet() {
+      document.body.classList.remove('sheet-open');
+      sheet.inert = true;
+      state = null;
+    }
+
+    async function request(method, body) {
+      const url = '/api/containers/' + encodeURIComponent(state.info.container);
+      const r = await fetch(url, body ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { method });
+      if (!r.ok) throw new Error((await r.text()) || 'HTTP ' + r.status);
+      return r.status === 204 ? null : r.json();
+    }
+
+    // Each action captures `state` so a late response can't overwrite a newer scan.
+    async function load() {
+      const s = state;
+      try {
+        const { contents } = await request('GET');
+        Object.assign(s, { contents, mode: contents ? 'view' : 'edit' });
+      } catch (err) {
+        Object.assign(s, { mode: 'error', error: err.message });
+      }
+      if (state === s) render();
+    }
+
+    async function save(value) {
+      const s = state;
+      s.busy = true; render();
+      try {
+        await request('PUT', { product: s.info.product, size: s.info.size, contents: value });
+        Object.assign(s, { contents: value, mode: 'view' });
+        toast('Saved');
+      } catch (err) {
+        toast('Couldn’t save: ' + err.message);
+      }
+      s.busy = false;
+      if (state === s) render();
+    }
+
+    async function clearContainer() {
+      const s = state;
+      if (!confirm(`Clear everything stored for container ${s.info.container}?`)) return;
+      s.busy = true; render();
+      try {
+        await request('DELETE');
+        Object.assign(s, { contents: null, mode: 'edit' });
+        toast('Cleared');
+      } catch (err) {
+        toast('Couldn’t clear: ' + err.message);
+      }
+      s.busy = false;
+      if (state === s) render();
+    }
+
+    function render() {
+      if (state.mode === 'search') return renderSearch();
+      const { info, mode, contents, busy } = state;
+      const title = !info ? 'Unrecognised code' : info.container ? `Container ${info.container}` : `Product ${info.product}`;
+
+      const parts = [h('div', { className: 'sheet-head' },
+        h('div', {},
+          state.back != null && h('button', { className: 'back-btn', textContent: '‹ Results', onclick: () => openSearch(state.back) }),
+          h('p', { className: 'eyebrow' }, info ? 'Zwilling food storage' : 'Scanned'), h('h2', { id: 'sheet-title' }, title)),
+        h('button', { className: 'icon-btn', ariaLabel: 'Close and scan another', onclick: closeSheet, textContent: '✕' }))];
+
+      if (!info) {
+        parts.push(h('div', { className: 'notice' }, 'This isn’t a Zwilling food storage code.', h('div', { className: 'raw' }, state.text)));
+      } else {
+        parts.push(h('ul', { className: 'chips' },
+          chip('Product', info.product), chip('Size', info.size), chip('Container', info.container)));
+
+        if (!info.container) {
+          parts.push(h('div', { className: 'notice' }, 'This code has no container ID, so contents can’t be saved for it.'));
+        } else if (mode === 'loading') {
+          parts.push(h('span', { className: 'label' }, 'Contents'), h('div', { className: 'skeleton', ariaLabel: 'Loading' }));
+        } else if (mode === 'error') {
+          parts.push(h('div', { className: 'notice' }, 'Couldn’t load this container: ' + state.error),
+            h('div', { className: 'actions' }, h('button', { className: 'btn btn-secondary', textContent: 'Try again',
+              onclick: () => { state.mode = 'loading'; render(); load(); } })));
+        } else if (mode === 'view') {
+          parts.push(
+            h('span', { className: 'label' }, 'Contents'),
+            h('div', { className: 'readonly', role: 'textbox', ariaReadOnly: 'true', ariaLabel: 'Contents', textContent: contents }),
+            h('div', { className: 'actions' },
+              h('button', { className: 'btn btn-danger', textContent: 'Clear', disabled: busy, onclick: clearContainer }),
+              h('button', { className: 'btn btn-primary', textContent: 'Edit', disabled: busy, onclick: () => { state.mode = 'edit'; render(); } })));
+        } else {
+          parts.push(editor(contents, busy));
+        }
+      }
+      sheetBody.replaceChildren(...parts);
+      sheetBody.querySelector('textarea')?.focus({ preventScroll: true });
+    }
+
+    function chip(label, value) {
+      return value ? h('li', { className: 'chip' }, h('span', {}, label), h('b', {}, value)) : null;
+    }
+
+    function editor(contents, busy) {
+      const ta = h('textarea', { id: 'contents', rows: 4, maxLength: MAX_LEN, value: contents ?? '', disabled: busy,
+        placeholder: 'e.g. Beef chili, made 2 Oct' });
+      const counter = h('div', { className: 'counter' });
+      const saveBtn = h('button', { className: 'btn btn-primary', type: 'submit', textContent: busy ? 'Saving…' : 'Save' });
+      const sync = () => { counter.textContent = `${ta.value.length} / ${MAX_LEN}`; saveBtn.disabled = busy || !ta.value.trim(); };
+      ta.addEventListener('input', sync);
+      sync();
+      return h('form', { onsubmit: e => { e.preventDefault(); save(ta.value.trim()); } },
+        h('label', { className: 'label', htmlFor: 'contents' }, contents ? 'Edit contents' : 'What’s in it?'),
+        !contents && h('p', { className: 'empty-note' }, 'Nothing is stored for this container yet.'),
+        ta, counter,
+        h('div', { className: 'actions' },
+          contents && h('button', { className: 'btn btn-secondary', type: 'button', textContent: 'Cancel', disabled: busy,
+            onclick: () => { state.mode = 'view'; render(); } }),
+          saveBtn));
+    }
+
+    $('#search-btn').addEventListener('click', () => openSearch(''));
+
+    function openSearch(query) {
+      state = { mode: 'search', query };
+      document.body.classList.add('sheet-open');
+      sheet.inert = false;
+      render();
+    }
+
+    function renderSearch() {
+      const input = h('input', { type: 'search', className: 'search-field', value: state.query, enterKeyHint: 'search',
+        placeholder: 'Search contents or container ID', ariaLabel: 'Search contents or container ID', autocomplete: 'off' });
+      const meta = h('p', { className: 'results-meta', role: 'status' });
+      const list = h('ul', { className: 'results' });
+      const s = state;
+      let timer, seq = 0;
+      const run = async () => {
+        const mine = ++seq;
+        s.query = input.value;
+        meta.textContent = 'Searching…';
+        try {
+          const r = await fetch('/api/containers?q=' + encodeURIComponent(input.value));
+          if (!r.ok) throw new Error((await r.text()) || 'HTTP ' + r.status);
+          const rows = await r.json();
+          if (mine !== seq || state !== s) return; // a newer search or a different sheet won
+          meta.textContent = rows.length ? `${rows.length} container${rows.length === 1 ? '' : 's'}` : 'No matching containers';
+          list.replaceChildren(...rows.map(row => h('li', {}, h('button', { className: 'result', onclick: () => openResult(row) },
+            h('b', {}, row.container), h('small', {}, [row.product, row.size].filter(Boolean).join(' · ')), h('span', {}, row.contents)))));
+        } catch (err) {
+          if (mine === seq) meta.textContent = 'Search failed: ' + err.message;
+        }
+      };
+      input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 200); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); run(); } });
+      sheetBody.replaceChildren(
+        h('div', { className: 'sheet-head' },
+          h('div', {}, h('p', { className: 'eyebrow' }, 'Stored containers'), h('h2', { id: 'sheet-title' }, 'Search')),
+          h('button', { className: 'icon-btn', ariaLabel: 'Close search', onclick: closeSheet, textContent: '✕' })),
+        input, meta, list);
+      input.focus({ preventScroll: true });
+      run();
+    }
+
+    function openResult(row) {
+      state = { text: null, info: { product: row.product, size: row.size, container: row.container },
+        contents: row.contents, mode: 'view', back: state.query };
+      render();
+    }
+
+    let toastTimer;
+    function toast(msg) {
+      const t = $('#toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+    }
+  </script>
+</body>
+</html>
