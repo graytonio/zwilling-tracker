@@ -45,8 +45,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Read-only: main's CI docker job keeps this cache warm; anything saved from a tag is unreadable by later tags.
+          cache-from: type=gha,scope=docker
 
   github-release:
     needs: image

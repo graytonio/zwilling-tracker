@@ -19,16 +19,23 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
+        with:
+          # PR and tag caches are only visible to that ref, so saving them just evicts main's cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run lint
       # Starts postgres via docker compose, then runs cargo test.
       - run: mise run test
 
+  # Builds both release platforms so main keeps a warm layer cache that tag releases can read
+  # (a tag run can only restore caches saved by that tag or by main).
   docker:
     runs-on: ubuntu-latest
     steps:
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
+          platforms: linux/amd64,linux/arm64
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,scope=docker,mode=max' || '' }}
