@@ -21,14 +21,19 @@ async fn main() {
 }
 
 async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
+    // Concurrent CREATE TABLE IF NOT EXISTS on a fresh database can still fail with a
+    // duplicate pg_type key, so serialize it with a transaction-scoped advisory lock.
     sqlx::raw_sql(
-        "CREATE TABLE IF NOT EXISTS containers (
+        "BEGIN;
+        SELECT pg_advisory_xact_lock(hashtext('zwilling-tracker-migrate'));
+        CREATE TABLE IF NOT EXISTS containers (
             container_code TEXT PRIMARY KEY,
             product_code TEXT NOT NULL,
             size TEXT,
             contents TEXT NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )",
+        );
+        COMMIT;",
     )
     .execute(pool)
     .await?;
